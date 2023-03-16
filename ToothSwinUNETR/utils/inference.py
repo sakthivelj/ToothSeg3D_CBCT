@@ -44,7 +44,7 @@ from monai.transforms import (
 )
 if __name__ == "__main__":
     sys.path.insert(1, os.path.join(os.getcwd(), 'ToothSwinUNETR'))
-from models.swin_unetr_mlt import SwinUNETR
+from models.swin_unetr import SwinUNETR
 from utils.postprocessing import post_processing_segmentation
 from utils.data_augmentation import CropForegroundFixedD
 
@@ -212,7 +212,7 @@ with torch.no_grad():
         # print(test_data["image"].shape)
         if model_name == "SwinUNETR":
             test_data["pred"] = sliding_window_inference(test_data["image"], (128,128,128), sw_batch_size=8, predictor=model, overlap=0.6, sw_device=device,
-                                                        device=device, mode='gaussian', sigma_scale=0.125, padding_mode='constant', cval=0, progress=False)['seg']
+                                                        device=device, mode='gaussian', sigma_scale=0.125, padding_mode='constant', cval=0, progress=False)
         else:
             test_data["pred"] = sliding_window_inference(test_data["image"], (128,128,128), sw_batch_size=8, predictor=model, overlap=0.6, sw_device=device,
                                                          device=device, mode='gaussian', sigma_scale=0.125, padding_mode='constant', cval=0, progress=False)

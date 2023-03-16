@@ -133,7 +133,6 @@ binary_output = f"multimedia/inference/{model}_33class"
 if not os.path.exists(binary_output):
     os.mkdir(binary_output)
 
-
 #TRANSFORMS
 post_transform_binary = Compose([
     ActivationsD(keys="pred", sigmoid=True),
@@ -190,7 +189,6 @@ def save_nifti(array, path, folder_suffix="ablation"):
     new_dir = f'multimedia/inference/visual_{folder_suffix}/ablation_{ablation}'
     if not os.path.exists(new_dir):
         os.makedirs(new_dir)
-    # new_path = os.path.join(new_dir, path.split('/')[-3], path.split('/')[-1])
     new_path = os.path.join(new_dir, path.split('/')[-1])
     nib.save(nib_roi, new_path)
 
@@ -215,6 +213,7 @@ with torch.no_grad():
             min_slice = coords.min(axis=0)
             max_slice = coords.max(axis=0)  
             new_shape = max_slice-min_slice
+            # TIGHT ROI or LOOSE ROI - choose margin
             margins = (0.5, 0.5, 0.5) #loose
             # margins = (0.1,0.1,0.1) #tight
             crop_margins = tuple(int(r*x) for x, r in zip(new_shape, margins))

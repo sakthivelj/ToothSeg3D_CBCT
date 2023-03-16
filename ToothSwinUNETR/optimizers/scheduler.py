@@ -2,6 +2,7 @@ import math
 import torch
 from torch.optim.lr_scheduler import _LRScheduler
 
+#scheduler based on https://github.com/katsura-jp/pytorch-cosine-annealing-with-warmup/blob/master/cosine_annealing_warmup/scheduler.py
 class CosineAnnealingWarmupRestarts(_LRScheduler):
     """
         optimizer (Optimizer): Wrapped optimizer.

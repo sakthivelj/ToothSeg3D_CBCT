@@ -1,3 +1,4 @@
+"""Postprocessing script for CBCT segmentation using dentition-based learning."""
 import sys
 import os
 from typing import Optional, Union

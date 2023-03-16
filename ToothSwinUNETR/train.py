@@ -1,3 +1,4 @@
+"""Train script for CBCT segmentation using dentition-based learning."""
 import time
 import glob
 import os
@@ -8,6 +9,7 @@ from natsort import natsorted
 task = 'binary' if args.classes == 1 else 'multiclass'
 args.cache_dir = os.path.join(args.cache_dir, f"{task}_{args.classes}_{args.patch_size[0]}_{args.spatial_crop_size[0]}_{args.spatial_crop_size[1]}_{args.spatial_crop_size[2]}_ablation_local_roi")
 
+# Persistent Dataset cache for time and energy save
 if args.clear_cache:
     print("Clearning cache...")
     train_cache = glob.glob(os.path.join(args.cache_dir, 'train/*.pt'))
@@ -22,6 +24,7 @@ if args.clear_cache:
 
 if args.comet:
     from comet_ml import Experiment
+    # replace API_KEY with our own key
     experiment = Experiment("API_KEY", project_name="CBCT_seg")
     tags = args.tags.split('#')
     tags += [args.model_name]
@@ -45,7 +48,7 @@ from torch.nn import MSELoss, BCEWithLogitsLoss
 
 #MONAI modules
 from monai.networks.nets import UNet, VNet, AttentionUnet, UNETR
-from models.swin_unetr_mlt import SwinUNETR
+from models.swin_unetr import SwinUNETR
 from monai.networks.utils import one_hot
 from monai.losses import DiceLoss, DiceFocalLoss
 from monai.metrics import MeanIoU, DiceMetric, HausdorffDistanceMetric, SurfaceDistanceMetric
@@ -103,7 +106,8 @@ if args.device == 'cuda':
 trans = Transforms(args, device)
 set_track_meta(True)
 
-#Monai datalist version
+#DATA
+#global approach
 if args.patch_mode == "global":
     data_root_dir = args.data
     datasets = ['scans']
@@ -112,13 +116,10 @@ if args.patch_mode == "global":
     for dataset, labels in zip(datasets, labels):
         nifti_paths_scans = natsorted(glob.glob(os.path.join(data_root_dir, dataset, '**', '*.nii.gz'), recursive=True))
         nifti_paths_labels = natsorted(glob.glob(os.path.join(data_root_dir, labels, '**', '*.nii.gz'), recursive=True))
-        torch_paths_label_boundaries = natsorted(glob.glob(os.path.join(data_root_dir, 'label_boundaries', '**', '*.nii.gz'), recursive=True))
-        torch_paths_label_boundaries_cls = natsorted(glob.glob(os.path.join(data_root_dir, 'label_class_boundaries', '**', '*.nii.gz'), recursive=True))
-        nifti_list = [{'image': scan, 'label': label, 'label_bnd': label_bnd, 'label_bnd_cls': label_bnd_cls} for (
-            scan, label, label_bnd, label_bnd_cls) in zip(nifti_paths_scans, nifti_paths_labels, torch_paths_label_boundaries, torch_paths_label_boundaries_cls)]
+        nifti_list = [{'image': scan, 'label': label} for (scan, label) in zip(nifti_paths_scans, nifti_paths_labels)]
         datalist.extend(nifti_list)
-    #limit dataset on scan 97
     datalist = datalist[0:97]
+#local approach
 elif args.patch_mode == "local":
     data_root_dir = args.data
     datalist =[]
@@ -131,12 +132,13 @@ if not os.path.exists(args.cache_dir):
     os.makedirs(os.path.join(args.cache_dir, 'train'))
     os.makedirs(os.path.join(args.cache_dir, 'val'))
 
+#DATASET
 train_dataset = PersistentDataset(datalist, trans.train_transform, cache_dir=os.path.join(args.cache_dir, 'train'))
 val_dataset = PersistentDataset(datalist, trans.val_transform, cache_dir=os.path.join(args.cache_dir, 'val'))
-
 kfold = KFold(n_splits=args.split, shuffle=False)
 
-# based on china dataset for classes: 0-32 (background 0 and 32 classes {1,2,3,...,31,32})
+#LOSS FUNCTION
+# cross-entropy weights based on chinese public dataset for classes: 0-32 (background 0 and 32 classes {1,2,3,...,31,32})
 # inverse frequency: n_samples / (n_classes * np.bincount(y))
 if args.weighted_ce:
     weights = torch.from_numpy(numpy.load('ToothSwinUNETR/losses/ce_weights.npy')).to(dtype=torch.float32, device=device)
@@ -144,12 +146,6 @@ if args.weighted_ce:
     assert(len(weights) == args.classes)
 
 ls_weights = args.loss_weights
-if args.multitask:
-    criterion_binary_seg = DiceLoss(sigmoid=True)
-    criterion_bnd = MSELoss()
-    criterion_bnd_cls = DiceCELoss(include_background=False, to_onehot_y=True, softmax=True, lambda_ce=ls_weights['bnd_ce_w'], lambda_dice=ls_weights['bnd_dice_w'], ce_weight=weights)
-    criterion_id = BCEWithLogitsLoss(weight=weights[1:], pos_weight=torch.tensor([2], device=device)) 
-
 if args.loss_name == "DiceLoss" and args.classes == 1:
     criterion_seg = DiceLoss(sigmoid=True)
 elif args.loss_name == "DiceCELoss":
@@ -165,17 +161,12 @@ else:
 
 ### TRAINING STEP ###
 def training_step(batch_idx, train_data, args):
-    binary_loss, ce_loss, gwdl_loss, boundary_loss, boundary_cls_loss, tooth_id_loss = tuple([torch.zeros((1)) for i in range(6)])
-
-    if scaler is not None:
-        binary_target = trans.binarize_transform(train_data)
+    #scaler used only for debug, models for all final results are trained in FP32 precision
+    if args.use_scaler and scaler is not None:
         with torch.cuda.amp.autocast():
-            output, out_bnd, out_bnd_cls = model(train_data["image"])
-            gwdl_loss, ce_loss = criterion_seg(output, train_data["label"].long())
-            boundary_loss = criterion_bnd(out_bnd,train_data["label_bnd"])
-            boundary_cls_loss = criterion_bnd_cls(out_bnd_cls, train_data["label_bnd_cls"])
-            loss_binary = criterion_binary_seg(torch.sum(output, dim=1, keepdim=True), binary_target["label"].long())
-            loss = loss_binary + gwdl_loss + ce_loss + boundary_loss + 0.5*boundary_cls_loss
+            output = model(train_data["image"])
+            dice_loss, ce_loss = criterion_seg(output, train_data["label"].long())
+            loss = ls_weights['dice_w'] * dice_loss + ls_weights['ce_w'] * ce_loss
             loss = loss / accum_iter 
         scaler.scale(loss).backward()
         if ((batch_idx + 1) % accum_iter == 0) or (batch_idx + 1 == len(train_loader)):
@@ -184,33 +175,14 @@ def training_step(batch_idx, train_data, args):
             optimizer.zero_grad()
     else:
         output_dict = model(train_data["image"])
-        if args.model_name == "SwinUNETR":
-            output_dict=output_dict['seg']
-        
-        if args.multitask:
-            binary_target = trans.binarize_transform(train_data)
-            #initialise zero value for logger
-            binary_loss =  ls_weights['bin_w'] * criterion_binary_seg(torch.sum(output_dict['seg'], dim=1, keepdim=True), binary_target["label"].long())
-            gwdl_loss, ce_loss = criterion_seg(output_dict['seg'], train_data["label"].long())
-            gwdl_loss *= ls_weights['gwdl_w']
-            ce_loss *= ls_weights['ce_w']
-            #presence loss
-            unique_tooth = torch.unique(train_data["label"])
-            ids = range(1,33)
-            presence_list = torch.tensor([int(i not in unique_tooth) for i in ids], device=device, dtype=torch.float32)
-            tooth_id_loss = ls_weights['tooth_id_w'] * criterion_id(output_dict['tooth_id'][0], presence_list)
-            if args.boundary_loss:
-                boundary_loss = criterion_bnd(torch.sigmoid(output_dict['bnd_regression']), train_data["label_bnd"])
-            if args.boundary_cls_loss:
-                boundary_cls_loss = criterion_bnd_cls(output_dict['bnd_seg'], train_data["label_bnd_cls"])
-            loss =binary_loss + ce_loss + gwdl_loss + boundary_cls_loss + tooth_id_loss
+       
+        if args.classes > 1:
+            dice_loss, ce_loss = criterion_seg(output_dict, train_data["label"].long())
+            loss = ls_weights['dice_w'] * dice_loss + ls_weights['ce_w'] * ce_loss
         else:
-            if args.classes > 1:
-                dice_loss, ce_loss = criterion_seg(output_dict, train_data["label"].long())
-                loss = ls_weights['dice_w'] * dice_loss + ls_weights['ce_w'] * ce_loss
-            else:
-                dice_loss = criterion_seg(output_dict, train_data["label"].long())
-                loss = ls_weights['dice_w'] * dice_loss
+            #binary global approach - only dice loss
+            dice_loss = criterion_seg(output_dict, train_data["label"].long())
+            loss = ls_weights['dice_w'] * dice_loss
 
         loss = loss / accum_iter
         loss.backward()
@@ -240,7 +212,7 @@ def training_step(batch_idx, train_data, args):
     if (batch_idx+1) % args.log_batch_interval == 0:
         print(" ", end="")
         print(f"Batch: {batch_idx + 1}/{len(train_loader)}"
-            f" Loss: {loss.item():.4f} - ce:{ce_loss.item():.4f}, dice(gwdl): {dice_loss.item():.4f}, bin: {binary_loss.item():.4f}, bnd: {boundary_loss.item():.4f}, bnd_cls: {boundary_cls_loss.item():.4f}, id:{tooth_id_loss.item():.4f}."
+            f" Loss: {loss.item():.4f} - ce:{ce_loss.item():.4f}, dice(gwdl): {dice_loss.item():.4f}."
             f" *** Jaccard: {jac.mean().item():.4f}"
             f" Dice Index: {dice.mean().item():.4f}"
             f" Time: {epoch_time:.2f}s")
@@ -264,11 +236,10 @@ def training_step(batch_idx, train_data, args):
 ### VALIDATION STEP ###
 def validation_step(batch_idx, val_data, args):
 
-    # with torch.cuda.amp.autocast():
-    val_output = sliding_window_inference(val_data["image"], roi_size=args.patch_size, sw_batch_size=8, predictor=model, overlap=0.6, sw_device=device,
-                                        device=device, mode='gaussian', sigma_scale=0.125, padding_mode='constant', cval=0, progress=True)
-    if args.model_name == "SwinUNETR":
-        val_output=val_output['seg']
+
+    with torch.cuda.amp.autocast(args.use_scaler):
+        val_output = sliding_window_inference(val_data["image"], roi_size=args.patch_size, sw_batch_size=8, predictor=model, overlap=0.6, sw_device=device,
+                                            device=device, mode='gaussian', sigma_scale=0.125, padding_mode='constant', cval=0, progress=True)
 
     if args.classes == 1:
         val_preds = [trans.post_pred(i).long() for i in decollate_batch(val_output)]
@@ -315,6 +286,7 @@ for fold, (train_ids, test_ids) in enumerate(kfold.split(train_dataset)):
     strides = list((args.unet_depth-1)*(2,))
     
     #MODEL INIT
+    # SOTA architectures
     if args.model_name == "SwinUNETR":
         model = SwinUNETR(spatial_dims=3, in_channels=1, out_channels=args.classes, img_size=args.patch_size,
                           feature_size=args.feature_size, use_checkpoint=args.activation_checkpoints)
@@ -350,7 +322,7 @@ for fold, (train_ids, test_ids) in enumerate(kfold.split(train_dataset)):
         args.start_epoch = torch.load(args.trained_model)['epoch']
         print(f'Loaded model, optimizer, starting with epoch: {args.start_epoch}')
 
-    
+    # Scheduler
     if args.scheduler_name == 'annealing':
         scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, verbose=True)
     elif args.scheduler_name == 'warmup':
@@ -358,6 +330,7 @@ for fold, (train_ids, test_ids) in enumerate(kfold.split(train_dataset)):
     elif args.scheduler_name == "warmup_restarts":
         scheduler = CosineAnnealingWarmupRestarts(optimizer, warmup_steps=args.warmup_steps, first_cycle_steps=int(args.epochs * (2/3)), cycle_mult=(1/2), gamma=args.scheduler_gamma, max_lr=args.lr, min_lr=1e-6) 
     
+    # Metrics
     if args.classes > 1:
         dice_metric = DiceMetric(
             include_background=args.include_background, reduction='mean_batch')

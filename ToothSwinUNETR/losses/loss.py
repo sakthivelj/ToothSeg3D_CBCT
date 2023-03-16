@@ -1,36 +1,20 @@
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#     http://www.apache.org/licenses/LICENSE-2.0
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-# source repo: https://github.com/oikosohn/compound-loss-pytorch
-# based on Yeung et al. - Unified Focal loss: Generalising Dice and cross entropy-based losses to handle class imbalanced medical image segmentation
-# https://doi.org/10.48550/arxiv.2102.04525
-
 from typing import Callable, Optional
 import torch
 import torch.nn as nn
 from torch.nn.modules.loss import _Loss
 import numpy as np
-from ToothSwinUNETR.losses.gwdl import GeneralizedWassersteinDiceLoss
-from monai.networks import one_hot
 
 from monai.losses import GeneralizedWassersteinDiceLoss as monai_gwdl
-from monai.losses import FocalLoss, DiceLoss
+from monai.losses import DiceLoss
 from monai.utils import DiceCEReduction, look_up_option, pytorch_after
 
 def get_tooth_dist_matrix(device, quarter_penalty : bool = "True"):
 
     if quarter_penalty:
-        dist_matrix = torch.from_numpy(np.load('ToothSwinUNETR/losses/wasserstein_matrix.npy')).to(device)
+        dist_matrix = torch.from_numpy(np.load('ToothSwinUNETR/losses/wasserstein_matrix_M2.npy')).to(device)
         print("Using intra quarters penalty")
     else:
-        dist_matrix = torch.from_numpy(np.load('ToothSwinUNETR/losses/wasserstein_matrix_equal.npy')).to(device)
+        dist_matrix = torch.from_numpy(np.load('ToothSwinUNETR/losses/wasserstein_matrix_M1.npy')).to(device)
         print("Using equal quarters - no intra quarter penalty")
     # add background class - all ones 
     dist_matrix = torch.cat([torch.ones((1,32)).to(device), dist_matrix])
@@ -50,8 +34,6 @@ class GWDLCELoss(nn.Module):
         self.lambda_dice = lambda_dice
         self.lambda_ce = lambda_ce
         self.cross_entropy = nn.CrossEntropyLoss(ce_weight, reduction=reduction)
-        # self.focal_loss = FocalLoss(include_background=True, to_onehot_y=True, gamma=0, reduction=reduction)
-        # self.generalized_dice = GeneralizedWassersteinDiceLoss(dist_matrix, weighting_mode, reduction)
         self.generalized_dice = monai_gwdl(dist_matrix, weighting_mode, reduction)
     
     def ce(self, input: torch.Tensor, target: torch.Tensor):
@@ -69,14 +51,12 @@ class GWDLCELoss(nn.Module):
         return self.focal_loss(input, target)
     
     def gwdl(self, y_pred: torch.Tensor, y_true: torch.Tensor):
-        # y_true = one_hot(y_true, num_classes=y_pred.shape[1], dim=1).long()
         return self.generalized_dice(y_pred, y_true)
 
     def forward(self, y_pred: torch.Tensor, y_true: torch.Tensor):
         ce_loss = self.ce(y_pred, y_true) 
         # focal_loss = self.fl(y_pred, y_true)
         gwdl_loss = self.gwdl(y_pred, y_true)
-        # total_loss = self.lambda_dice * gwdl_loss + self.lambda_ce * ce_loss
         return gwdl_loss, ce_loss
     
 

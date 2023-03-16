@@ -10,44 +10,20 @@ from monai.transforms import (
 
 from monai.transforms import (
     Compose,
-    ActivationsD,
-    AddChannelD,
-    AsDiscreteD,
-    CropForegroundD,
-    CenterScaleCropD,
-    CenterSpatialCropD,
-    CropForegroundD,
     EnsureChannelFirstD,
     EnsureTypeD,
-    FgBgToIndicesD,
     LoadImageD,
-    MeanEnsembleD,
-    NormalizeIntensityD,
     OrientationD,
     ResizeD,
-    ResizeWithPadOrCropD,
     RandAdjustContrastD,
-    Rand3DElasticD,
-    RandFlipD,
-    RandGaussianNoiseD,
-    RandGaussianSmoothD,
-    RandCropByPosNegLabelD,
-    RandCoarseShuffleD,
-    RandRotateD,
-    RandRotate90D,
-    RandAffineD,
     RandSpatialCropD,
     RandScaleIntensityD,
     RandShiftIntensityD,
     RandZoomD,
-    ScaleIntensityD,
     ScaleIntensityRangeD,
     SpacingD,
-    SpatialCropD,
     ThresholdIntensityD,
-    ToTensorD,
     ToDeviceD,
-    VoteEnsembleD
 )
 
 # NEW CROP FOREGROUND
@@ -214,7 +190,6 @@ class Transforms():
                  device : str = 'cpu' 
                 ) -> None:
 
-        self.is_h5 = 'h5' in args.data
         self.pixdim = (args.pixdim,)*3
         self.class_treshold = args.classes if args.classes == 1 else args.classes-1
         keys = args.keys
@@ -258,7 +233,7 @@ class Transforms():
                                         roi_size=args.patch_size,
                                         random_center=True,
                                         random_size=False),
-                    # Do not use flips - because mirror reflection changes classes - tooth eg. 44 and 34 is identical
+                    # DO NOT !!! use flips -  mirror reflection is highly misleading for classification task - tooth eg. 44 and 34 is identical;
                     # RandFlipD(keys=["image", "label"], prob=0.25, spatial_axis=0), 
                     # RandFlipD(keys=["image", "label"], prob=0.25, spatial_axis=1), # axis=2 is z axis and patient is always upright so no need for this augmentation
                     # RandZoomD(keys=["image", "label"], prob=0.25, min_zoom=0.8, max_zoom=1.2, mode=("trilinear", "nearest"), padding_mode='constant', constant_values=(0, 0), keep_size=True),
@@ -270,9 +245,7 @@ class Transforms():
                                         prob=0.25),
                     RandShiftIntensityD(keys="image", offsets=0.20, prob=0.5),
                     RandScaleIntensityD(keys="image", factors=0.15, prob=0.5),
-                    # RandCoarseShuffleD(keys="image", holes=8, max_holes=16, spatial_size=(16,16,16), max_spatial_size=(32,32,32), prob = 1.0),
-                    # RandCoarseShuffleD(keys="image", holes=8, max_holes=20, spatial_size=(22,22,22), max_spatial_size=(44,44,44), prob = 0.5), #it gives dropout from 0.5% to 10% of the patch size volume
-                    #FINAL CHECK
+                     #FINAL CHECK
                     EnsureTypeD(keys=keys, data_type="tensor", device=device)
                 ]
             )   
@@ -286,11 +259,6 @@ class Transforms():
                     ToDeviceD(keys=keys, device=device),
                     #GEOMETRIC - NON-RANDOM - PREPROCESING
                     SpacingD(keys=keys, pixdim=self.pixdim, mode=("bilinear", "nearest")),
-                    # SpatialPadD(keys=["image", "label"],
-                    #             spatial_size = args.padding_size, # pad z axis if smaller than X
-                    #             method='symmetric',
-                    #             mode='constant',
-                    #             constant_values=(-1000, 0)),
                     CropForegroundFixedD(keys=keys,
                                         source_key="label",
                                         select_fn=lambda x: x > 0,
@@ -299,8 +267,6 @@ class Transforms():
                                         mode='constant',
                                         return_coords=True,
                                         constant_values=(-1000, 0)),
-                    # CenterSpatialCropD(keys=["image", "label"],
-                    #                    roi_size=(384,384,256)), # perform it in case some scans where bigger than padding, crop based on padding size
                     #NON-RANDOM - perform on GPU
                     EnsureTypeD(keys=keys, data_type="tensor"),
                     ToDeviceD(keys=keys, device=device),
@@ -315,8 +281,8 @@ class Transforms():
                     ##label
                     ThresholdIntensityD(keys=["label"], above=False, threshold=self.class_treshold, cval=self.class_treshold), #clip to number of classes - clip value equall to max class value
                     ThresholdIntensityD(keys=["label"], above=True, threshold=0, cval=0), #clip from below to 0 - all values smaler than 0 are replaces with zeros
-                    # EnsureTypeD(keys=keys, data_type="tensor"),
-                    # ToDeviceD(keys=keys, device=device)
+                    EnsureTypeD(keys=keys, data_type="tensor"),
+                    ToDeviceD(keys=keys, device=device)
                 ]
             )   
         elif args.patch_mode == "local":
@@ -350,16 +316,6 @@ class Transforms():
                         #GEOMETRIC - RANDOM - DATA AUGMENTATION 
                         ToDeviceD(keys=keys, device=device),
                         RandZoomD(keys=keys, min_zoom=1.5, max_zoom=1.5, mode=("trilinear", "nearest"), prob=0.5),
-                        # RandSpatialCropD(keys=keys,
-                        #                     roi_size=args.patch_size,
-                        #                     random_center=True,
-                        #                     random_size=False),
-                        # Do not use flips - because mirror reflection changes classes - tooth eg. 44 and 34 is identical
-                        # RandFlipD(keys=["image", "label"], prob=0.25, spatial_axis=0), 
-                        # RandFlipD(keys=["image", "label"], prob=0.25, spatial_axis=1), # axis=2 is z axis and patient is always upright so no need for this augmentation
-                        # RandZoomD(keys=["image", "label"], prob=0.25, min_zoom=0.8, max_zoom=1.2, mode=("trilinear", "nearest"), padding_mode='constant', constant_values=(0, 0), keep_size=True),
-                        # RandRotate90D(keys, max_k=1, spatial_axes=(0,1), prob=0.1),
-                        # RandRotate90D(keys, max_k=1, spatial_axes=(1,0), prob=0.1),
                         #INTENSITY - RANDOM - DATA AUGMENTATION
                         RandAdjustContrastD(keys="image",
                                             gamma=(0.5, 2.0),
@@ -401,89 +357,6 @@ class Transforms():
                         EnsureTypeD(keys=keys, data_type="tensor", device=device)
                         ]
                     )   
-
-        ##############################################################################################################################################################
-        if args.multitask:
-            self.train_rec_transform = Compose(
-                [
-                    #INITAL SETUP
-                    LoadImageD(keys=["image", "label"], reader='NibabelReader'),
-                    EnsureChannelFirstD(keys=["image", "label"], channel_dim='no_channel'),
-                    OrientationD(keys=["image", "label"], axcodes="RAS"),
-                    ToDeviceD(keys=["image", "label"], device=device),
-                    #GEOMETRIC - NON-RANDOM - PREPROCESING
-                    SpacingD(keys=["image", "label"], pixdim=self.pixdim, mode=("bilinear", "nearest")),
-                    # CropForegroundFixedD(keys=["image", "label"],
-                    #                     source_key="label",
-                    #                     select_fn=lambda x: x > 0,
-                    #                     margin=args.spatial_crop_margin,
-                    #                     spatial_size=args.spatial_crop_size,
-                    #                     mode='constant',
-                    #                     return_coords=True,
-                    #                     constant_values=(-1000, 0)),
-                    CropForegroundD(keys=["image", "label"],
-                                    source_key="image",
-                                    select_fn=lambda x: x > 0,
-                                    margin=(32, 32, 32),
-                                    k_divisible=32,
-                                    mode='constant',
-                                    constant_values=(-1000, 0)),
-                    #NON-RANDOM - perform on GPU
-                    EnsureTypeD(keys=["image", "label"], data_type="tensor"),
-                    ToDeviceD(keys=["image", "label"], device=device),
-                    #INTENSITY - NON-RANDOM - PREPROCESING
-                    ThresholdIntensityD(keys=["image", "label"], above=False, threshold=self.class_treshold, cval=self.class_treshold), #clip to number of classes - clip value equall to max class value
-                    ThresholdIntensityD(keys=["image", "label"], above=True, threshold=0, cval=0), #clip from below to 0 - all values smaler than 0 are replaces with zeros
-                    #######################################
-                    #GEOMETRIC - RANDOM - DATA AUGMENTATION 
-                    ToDeviceD(keys=["image", "label"], device=device),
-                    RandSpatialCropD(keys=["image", "label"],
-                                        roi_size=args.patch_size,
-                                        random_center=True,
-                                        random_size=False),
-                    # Do not use flips - because mirror reflection changes classes - tooth eg. 44 and 34 is identical
-                    # RandFlipD(keys=["image", "label"], prob=0.25, spatial_axis=0), 
-                    # RandFlipD(keys=["image", "label"], prob=0.25, spatial_axis=1), # axis=2 is z axis and patient is always upright so no need for this augmentation
-                    # RandZoomD(keys=["image", "label"], prob=0.25, min_zoom=0.8, max_zoom=1.2, mode=("trilinear", "nearest"), padding_mode='constant', constant_values=(0, 0), keep_size=True),
-                    #INTENSITY - RANDOM - DATA AUGMENTATION
-                    RandCoarseShuffleD(keys="image", holes=8, max_holes=16, spatial_size=(16,16,16), max_spatial_size=(32,32,32), prob = 1.0), #it gives dropout from 0.5% to 10% of the patch size volume
-                    #FINAL CHECK
-                    EnsureTypeD(keys=["image", "label"], data_type="tensor", device=device)
-                ]
-            )   
-
-            self.val_rec_transform = Compose(
-                [
-                    #INITAL SETUP
-                    LoadImageD(keys=["image", "label"], reader='NibabelReader'),
-                    EnsureChannelFirstD(keys=["image", "label"], channel_dim='no_channel'),
-                    OrientationD(keys=["image", "label"], axcodes="RAS"),
-                    #GEOMETRIC - NON-RANDOM - PREPROCESING
-                    SpacingD(keys=["image", "label"], pixdim=self.pixdim, mode=("bilinear", "nearest"),),
-                    # SpatialPadD(keys=["image", "label"],
-                    #             spatial_size = args.padding_size, # pad z axis if smaller than X
-                    #             method='symmetric',
-                    #             mode='constant',
-                    #             constant_values=(-1000, 0)),
-                    CropForegroundFixedD(keys=["image", "label"],
-                                        source_key="label",
-                                        select_fn=lambda x: x > 0,
-                                        margin=args.spatial_crop_margin,
-                                        spatial_size=args.spatial_crop_size,
-                                        mode='constant',
-                                        return_coords=True,
-                                        constant_values=(-1000, 0)),
-                    # CenterSpatialCropD(keys=["image", "label"],
-                    #                    roi_size=(384,384,256)), # perform it in case some scans where bigger than padding, crop based on padding size
-                    #NON-RANDOM - perform on GPU
-                    EnsureTypeD(keys=["image", "label"], data_type="tensor"),
-                    ##label
-                    ThresholdIntensityD(keys=["image", "label"], above=False, threshold=args.classes, cval=args.classes-1), #clip to number of classes - clip value equall to max class value
-                    ThresholdIntensityD(keys=["image", "label"], above=True, threshold=0, cval=0), #clip from below to 0 - all values smaler than 0 are replaces with zeros
-                    ToDeviceD(keys=["image", "label"], device=device)
-                ]
-            )   
-
         ##############################################################################################################################################################
 
         self.binarize_transform = ThresholdIntensityD(keys="label", above=False, threshold=1, cval=1)
