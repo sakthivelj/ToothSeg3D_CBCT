@@ -32,7 +32,6 @@ Directories hierarchy:
 │   ├── losses
 │   │   ├── __init__.py
 │   │   ├── ce_weights.npy
-│   │   ├── gwdl.py
 │   │   ├── loss.py
 │   │   ├── wasserstein_matrix_M1.npy
 │   │   └── wasserstein_matrix_M2.npy
